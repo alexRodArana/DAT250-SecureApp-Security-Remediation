@@ -31,6 +31,7 @@ def grades(request: Request):
 @router.get("/grades/{grade_id}", response_class=HTMLResponse)
 def grade_detail(request: Request, grade_id: int):
     user = get_user_from_session(request)
+
     if not user:
         return RedirectResponse("/login", status_code=302)
 
@@ -38,11 +39,23 @@ def grade_detail(request: Request, grade_id: int):
         """
         SELECT g.*, a.title as assignment_title, u.full_name as student_name
         FROM grades g
-        JOIN assignments a ON a.id=g.assignment_id
-        JOIN users u ON u.id=g.student_id
+        JOIN assignments a ON a.id = g.assignment_id
+        JOIN users u ON u.id = g.student_id
         WHERE g.id=%s
         """,
         (grade_id,),
         fetchone=True,
     )
-    return templates.TemplateResponse("grade_detail.html", {"request": request, "user": user, "grade": grade})
+
+    if not grade:
+        return HTMLResponse("Grade not found", status_code=404)
+
+    allowed_staff_roles = {"admin", "teacher", "ta"}
+
+    if grade["student_id"] != user["id"] and user["role"] not in allowed_staff_roles:
+        return HTMLResponse("Forbidden", status_code=403)
+
+    return templates.TemplateResponse(
+        "grade_detail.html",
+        {"request": request, "user": user, "grade": grade},
+    )

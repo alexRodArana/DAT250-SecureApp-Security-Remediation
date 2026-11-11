@@ -48,6 +48,7 @@ def send_message(request: Request, recipient_id: int = Form(...), content: str =
 @router.get("/messages/{message_id}", response_class=HTMLResponse)
 def message_detail(request: Request, message_id: int):
     user = get_user_from_session(request)
+
     if not user:
         return RedirectResponse("/login", status_code=302)
 
@@ -62,4 +63,14 @@ def message_detail(request: Request, message_id: int):
         (message_id,),
         fetchone=True,
     )
-    return templates.TemplateResponse("message_detail.html", {"request": request, "user": user, "message": message})
+
+    if not message:
+        return HTMLResponse("Message not found", status_code=404)
+
+    if user["id"] not in {message["sender_id"], message["recipient_id"]}:
+        return HTMLResponse("Forbidden", status_code=403)
+
+    return templates.TemplateResponse(
+        "message_detail.html",
+        {"request": request, "user": user, "message": message},
+    )

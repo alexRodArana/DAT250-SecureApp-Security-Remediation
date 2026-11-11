@@ -1,13 +1,16 @@
-import time
+import hashlib
+import secrets
+
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from app.auth import hash_password, verify_password, create_session, clear_session, get_user_from_session
-from app.database import run_query
+from app.database import run_query, get_conn
 from app.email_service import send_reset_email
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+RESET_TOKEN_EXPIRY_MINUTES = 15
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -86,10 +89,12 @@ def reset_password_request(request: Request, email: str = Form(...)):
             {"request": request, "mode": "request", "message": "No user found with that email."},
         )
 
-    token = str(int(time.time()))[-6:]
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
     run_query(
         "INSERT INTO password_reset_tokens (user_id, token) VALUES (%s, %s)",
-        (user["id"], token),
+        (user["id"], token_hash),
         commit=True,
     )
     send_reset_email(email, token)
@@ -104,22 +109,64 @@ def reset_password_token_page(request: Request, token: str):
     return templates.TemplateResponse("reset_password.html", {"request": request, "mode": "set", "token": token, "message": None})
 
 
+
 @router.post("/reset-password/{token}", response_class=HTMLResponse)
 def reset_password_token(request: Request, token: str, new_password: str = Form(...)):
-    token_row = run_query(
-        "SELECT * FROM password_reset_tokens WHERE token=%s ORDER BY created_at DESC LIMIT 1",
-        (token,),
-        fetchone=True,
-    )
-    if not token_row:
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    conn = get_conn()
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT user_id
+                    FROM password_reset_tokens
+                    WHERE token = %s
+                      AND created_at > CURRENT_TIMESTAMP - (%s * INTERVAL '1 minute')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (token_hash, RESET_TOKEN_EXPIRY_MINUTES),
+                )
+
+                token_row = cur.fetchone()
+
+                if token_row is not None:
+                    user_id = token_row[0]
+
+                    cur.execute(
+                        "UPDATE users SET password_hash=%s WHERE id=%s",
+                        (hash_password(new_password), user_id),
+                    )
+
+                    cur.execute(
+                        "DELETE FROM sessions WHERE user_id=%s",
+                        (user_id,),
+                    )
+
+                    cur.execute(
+                        "DELETE FROM password_reset_tokens WHERE user_id=%s",
+                        (user_id,),
+                    )
+
+    finally:
+        conn.close()
+
+    if token_row is None:
         return templates.TemplateResponse(
             "reset_password.html",
-            {"request": request, "mode": "set", "token": token, "message": "Invalid token"},
+            {
+                "request": request,
+                "mode": "set",
+                "token": token,
+                "message": "Invalid or expired token",
+            },
+            status_code=400,
         )
 
-    run_query(
-        "UPDATE users SET password_hash=%s WHERE id=%s",
-        (hash_password(new_password), token_row["user_id"]),
-        commit=True,
-    )
-    return RedirectResponse("/login", status_code=302)
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie("session_token")
+    return response

@@ -7,6 +7,12 @@ INSERT INTO users (id, email, full_name, password_hash, role, phone, address, bi
 (6, 'charlie@student.uis.no', 'Charlie Berg', 'f59c8846af83a901e50b706c164d53cdebc8617cddd538b5a49e4a1d5ac99674', 'student', '+47 40001006', 'Stavanger', 'Works on secure coding exercises.')
 ON CONFLICT (id) DO NOTHING;
 
+SELECT setval(
+    pg_get_serial_sequence('users', 'id'),
+    COALESCE((SELECT MAX(id) FROM users), 1),
+    EXISTS (SELECT 1 FROM users)
+);
+
 INSERT INTO courses (id, title, description) VALUES
 (1, 'DAT250 Information and Software Security', 'Core course on practical software security.'),
 (2, 'DAT220 Database Systems', 'Relational design, SQL, and transactions.'),
@@ -54,10 +60,6 @@ INSERT INTO course_comments (course_id, user_id, content) VALUES
 (1, 4, 'The OWASP checklist is very helpful this week.'),
 (1, 5, 'Can we get clarification on token handling?'),
 (2, 6, 'DB isolation examples were clear.');
-
-INSERT INTO password_reset_tokens (user_id, token) VALUES
-(4, '123456'),
-(5, '123456');
 
 INSERT INTO app_settings (setting_key, setting_value) VALUES
 ('portal_theme', 'uis-light'),
